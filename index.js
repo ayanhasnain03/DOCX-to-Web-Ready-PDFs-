@@ -2,81 +2,122 @@ require("dotenv").config();
 const express = require("express");
 const multer = require("multer");
 const { PDFNet } = require("@pdftron/pdfnet-node");
+const mammoth = require("mammoth");
+const libre = require("libreoffice-convert");
 const cors = require("cors");
 
 const app = express();
 const port = 3001;
 
-// Step 0: Multer middleware init
-const upload = multer(); // Store file in memory, no temporary disk storage
+// Multer middleware to store uploaded files in memory
+const upload = multer();
 
-// Step 0: CORS setup here
-// ...
+// CORS configuration (allow cross-origin requests from the frontend)
+app.use(cors());
 
-// Conversion function for DOCX to PDF
-async function convertDocxToPdfFromMemory(fileBuffer) {
+// Function for converting DOCX to PDF using PDFTron
+async function convertDocxToPdf(fileBuffer) {
   return PDFNet.runWithCleanup(async () => {
-    // Step 1: Create PDFDoc container for final PDF
-    const pdfdoc = await PDFNet.PDFDoc.create();
-
-    // Step 2: Create a memory filter from the uploaded file buffer
+    const pdfDoc = await PDFNet.PDFDoc.create();
     const memoryFilter = await PDFNet.Filter.createFromMemory(fileBuffer);
-
-    // Step 3: Customize with options object as needed
     const options = new PDFNet.Convert.ConversionOptions();
 
-    // Step 4: Initialize the streaming conversion object
     const conversion =
       await PDFNet.Convert.streamingPdfConversionWithPdfAndFilter(
-        pdfdoc, // Target PDFDoc
-        memoryFilter, // Source Filter (from file buffer)
-        options // Conversion options
+        pdfDoc,
+        memoryFilter,
+        options
       );
 
-    // Step 5: Actual conversion progress loop
     while (
       (await conversion.getConversionStatus()) !==
       PDFNet.DocumentConversion.Result.e_Success
     ) {
-      await conversion.convertNextPage(); // Process each page
-      console.log(
-        `Progress: ${Math.round(
-          (await conversion.getProgress()) * 100
-        )}% - ${await conversion.getProgressLabel()}`
-      );
+      await conversion.convertNextPage();
     }
 
-    console.log("Conversion complete. Saving PDF...");
-    const pdfBuffer = await pdfdoc.saveMemoryBuffer(
+    const pdfBuffer = await pdfDoc.saveMemoryBuffer(
       PDFNet.SDFDoc.SaveOptions.e_linearized
     );
-    console.log("PDF saved to memory buffer.");
-    return pdfBuffer; // Return the buffer containing the converted PDF
-  }, process.env.APRYSE_API_KEY); // Ensure API key is passed
+    return pdfBuffer;
+  }, process.env.APRYSE_API_KEY); // Ensure API key from .env is passed for PDFTron
 }
 
-// Finally: POST route for file upload and conversion
-app.post("/convert-to-pdf", upload.single("file"), async (req, res) => {
+// Function for converting DOCX to HTML using Mammoth
+async function convertDocxToHtml(fileBuffer) {
+  const result = await mammoth.convertToHtml({ buffer: fileBuffer });
+  return result.value;
+}
+
+// Function for converting files using LibreOffice (supports multiple formats)
+async function convertWithLibre(fileBuffer, outputFormat = "pdf") {
+  return new Promise((resolve, reject) => {
+    libre.convert(fileBuffer, outputFormat, undefined, (err, convertedData) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(convertedData);
+      }
+    });
+  });
+}
+
+// Handle file upload and conversion based on requested format
+app.post("/convert-file", upload.single("file"), async (req, res) => {
   if (!req.file) {
-    return res.status(400).json({ error: "No file uploaded." });
+    return res.status(400).json({ error: "No file uploaded" });
   }
 
+  const { file } = req;
+  const { format } = req.body; // Format to convert to (e.g., pdf, docx, html)
+
   try {
-    // Convert DOCX file buffer to PDF buffer
-    const pdfBuffer = await convertDocxToPdfFromMemory(req.file.buffer);
+    let convertedFileBuffer;
 
-    // Send the converted PDF back with appropriate headers
-    res.set({
-      "Content-Type": "application/pdf",
-      "Content-Disposition": "attachment; filename=converted.pdf",
-    }); // This'll trigger a PDF file download for the client
-
-    res.send(pdfBuffer); // Send the PDF buffer as response
+    if (
+      file.mimetype ===
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" &&
+      format === "pdf"
+    ) {
+      // Convert DOCX to PDF
+      convertedFileBuffer = await convertDocxToPdf(file.buffer);
+      res.set({
+        "Content-Type": "application/pdf",
+        "Content-Disposition": "attachment; filename=converted.pdf",
+      });
+      res.send(convertedFileBuffer);
+    } else if (file.mimetype === "application/pdf" && format === "docx") {
+      // Convert PDF to DOCX (using LibreOffice)
+      convertedFileBuffer = await convertWithLibre(file.buffer, "docx");
+      res.set({
+        "Content-Type":
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "Content-Disposition": "attachment; filename=converted.docx",
+      });
+      res.send(convertedFileBuffer);
+    } else if (
+      file.mimetype ===
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" &&
+      format === "html"
+    ) {
+      // Convert DOCX to HTML
+      convertedFileBuffer = await convertDocxToHtml(file.buffer);
+      res.set({
+        "Content-Type": "text/html",
+        "Content-Disposition": "attachment; filename=converted.html",
+      });
+      res.send(convertedFileBuffer);
+    } else {
+      res.status(400).json({ error: "Invalid file or format requested." });
+    }
   } catch (error) {
-    res.status(500).json({ error: "Conversion failed." });
+    res
+      .status(500)
+      .json({ error: "Conversion failed", details: error.message });
   }
 });
 
+// Start the server
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });

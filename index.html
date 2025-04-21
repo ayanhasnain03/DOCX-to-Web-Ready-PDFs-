@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>File Converter Web App</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 20px;
+        background-color: #f4f4f9;
+      }
+      h1 {
+        text-align: center;
+        margin-bottom: 20px;
+      }
+      form {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      input[type="file"],
+      select,
+      button {
+        margin: 10px 0;
+      }
+      button {
+        padding: 10px 20px;
+        background-color: #4caf50;
+        color: white;
+        border: none;
+        cursor: pointer;
+        font-size: 16px;
+      }
+      button:hover {
+        background-color: #45a049;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>File Conversion Web App</h1>
+
+    <form id="uploadForm" enctype="multipart/form-data">
+      <label for="fileInput">Choose a file to upload:</label>
+      <input type="file" name="file" id="fileInput" required />
+
+      <label for="formatSelect">Choose format to convert to:</label>
+      <select name="format" id="formatSelect">
+        <option value="pdf">Convert to PDF</option>
+        <option value="docx">Convert to DOCX</option>
+        <option value="html">Convert to HTML</option>
+      </select>
+
+      <button type="submit">Convert</button>
+    </form>
+
+    <script>
+      document
+        .getElementById("uploadForm")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+
+          const fileInput = document.getElementById("fileInput");
+          const formatSelect = document.getElementById("formatSelect");
+          const file = fileInput.files[0];
+          const format = formatSelect.value;
+
+          if (!file) {
+            alert("Please select a file");
+            return;
+          }
+
+          const formData = new FormData();
+          formData.append("file", file);
+          formData.append("format", format);
+
+          try {
+            const response = await fetch("http://localhost:3001/convert-file", {
+              method: "POST",
+              body: formData,
+            });
+
+            if (response.ok) {
+              const blob = await response.blob();
+              const downloadLink = document.createElement("a");
+              downloadLink.href = URL.createObjectURL(blob);
+              downloadLink.download = `converted.${format}`;
+              downloadLink.click();
+            } else {
+              const errorData = await response.json();
+              alert(`Conversion failed: ${errorData.error}`);
+            }
+          } catch (error) {
+            alert("Error occurred: " + error.message);
+          }
+        });
+    </script>
+  </body>
+</html>
